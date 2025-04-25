@@ -2,19 +2,17 @@ import requests
 import re
 from requests.auth import HTTPBasicAuth
 
-# --- CONFIGURATION ---
 # --- SOURCE CONFLUENCE CONFIG ---
-dest_base_url = 
-dest_email = 
-dest_api_token = 
-
-# --- DESTINATION CONFLUENCE CONFIG ---
 source_base_url = 
 source_email = 
-source_api_token =
-
+source_api_token = 
+# --- DESTINATION CONFLUENCE CONFIG ---
+dest_base_url = 
+dest_email = 
+dest_api_token =
 # Headers
-space_key = "MNO"
+
+space_key = "PYTHON"
 headers = {"Content-Type": "application/json"}
 
 # --- CLEAN SPACE KEY ---
@@ -101,6 +99,39 @@ def create_page(space_key, title, body, parent_id=None):
         print(f"❌ Failed to create page {title}: {response.status_code} - {response.text}")
         return None
 
+def get_labels(page_id):
+    url = f"{source_base_url}/rest/api/content/{page_id}/label"
+    response = requests.get(url, auth=HTTPBasicAuth(source_email, source_api_token))
+
+    # Ensure response is valid JSON and check status code
+    if response.status_code == 200:
+        try:
+            json_data = response.json()
+            if isinstance(json_data, dict) and "results" in json_data:
+                labels = [label['name'] for label in json_data["results"]]  # Extract labels from the results
+                if not labels:
+                    print(f"⚠️ No labels found for page {page_id}")
+                return labels
+            else:
+                print(f"❌ Unexpected response format for labels: {json_data}")
+                return []
+        except ValueError as e:
+            print(f"❌ Error parsing JSON response: {e}")
+            return []
+    else:
+        print(f"❌ Failed to fetch labels for page {page_id}: {response.status_code} - {response.text}")
+        return []
+
+
+def add_labels_to_page(page_id, labels):
+    url = f"{dest_base_url}/rest/api/content/{page_id}/label"
+    payload = [{"prefix": "global", "name": label} for label in labels]  # Correctly format each label
+    response = requests.post(url, auth=HTTPBasicAuth(dest_email, dest_api_token), headers=headers, json=payload)
+    if response.status_code in [200, 201]:
+        print(f"✅ Labels added to page ID {page_id}")
+    else:
+        print(f"❌ Failed to add labels to page ID {page_id}: {response.status_code} - {response.text}")
+
 # --- ATTACHMENTS ---
 def get_attachments(page_id):
     url = f"{source_base_url}/rest/api/content/{page_id}/child/attachment"
@@ -121,7 +152,7 @@ def upload_attachment(dest_page_id, filename, file_bytes, mime_type="application
     else:
         print(f"❌ Failed to upload attachment {filename}: {response.status_code} - {response.text}")
 
-# --- MIGRATE SPACE, PAGES, ATTACHMENTS ---
+# --- MIGRATE SPACE, PAGES, ATTACHMENTS, AND LABELS ---
 def migrate_space(space_key):
     space = get_space_details(space_key)
     if not space:
@@ -145,9 +176,15 @@ def migrate_space(space_key):
             parent_old_id = page["ancestors"][-1]["id"]
             parent_id = id_map.get(parent_old_id)
 
+        # Create page in destination
         new_id = create_page(dest_key, title, body, parent_id)
         if new_id:
             id_map[old_id] = new_id
+
+            # Fetch and add labels
+            labels = get_labels(old_id)
+            if labels:
+                add_labels_to_page(new_id, labels)
 
             # Attachments
             attachments = get_attachments(old_id)
